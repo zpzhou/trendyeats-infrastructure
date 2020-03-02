@@ -1,0 +1,135 @@
+---
+Parameters:
+  KeyName:
+    Description: "Key name of an EC2 key pair"
+    Type: String
+  VPCStack:
+    Description: "Name of separate VPC stack from which to import resources"
+    Type: String
+  CodeAccessRoleStack:
+    Description: "Name of separate stack creating IAM role to fetch application code from S3"
+    Type: String
+  SSHAccessIPRange:
+    Description: "Allowed CIDR block range for SSH access to the EC2 instance"
+    Type: String
+  HTTPAccessIPRange:
+    Description: "Allowed CIDR block range for HTTP access to the EC2 instance"
+    Type: String
+
+Mappings:
+  AmazonLinux2Mappings:
+    'eu-north-1':
+      AMI: 'ami-0662eb9b9b8685935'
+    'ap-south-1':
+      AMI: 'ami-0217a85e28e625474'
+    'eu-west-3':
+      AMI: 'ami-007fae589fdf6e955'
+    'eu-west-2':
+      AMI: 'ami-0089b31e09ac3fffc'
+    'eu-west-1':
+      AMI: 'ami-0713f98de93617bb4'
+    'ap-northeast-2':
+      AMI: 'ami-0bea7fd38fabe821a'
+    'me-south-1':
+      AMI: 'ami-05f93aaf03b9bf20c'
+    'ap-northeast-1':
+      AMI: 'ami-011facbea5ec0363b'
+    'sa-east-1':
+      AMI: 'ami-09de7b4017733e2af'
+    'ca-central-1':
+      AMI: 'ami-0a269ca7cc3e3beff'
+    'ap-east-1':
+      AMI: 'ami-db3d78aa'
+    'ap-southeast-1':
+      AMI: 'ami-05c64f7b4062b0a21'
+    'ap-southeast-2':
+      AMI: 'ami-0b8b10b5bf11f3a22'
+    'eu-central-1':
+      AMI: 'ami-07cda0db070313c52'
+    'us-east-1':
+      AMI: 'ami-062f7200baf2fa504'
+    'us-east-2':
+      AMI: 'ami-02ccb28830b645a41'
+    'us-west-1':
+      AMI: 'ami-03caa3f860895f82e'
+    'us-west-2':
+      AMI: 'ami-04590e7389a6e577c'
+
+Resources:
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "EC2 Security Group"
+      GroupDescription: "EC2 Security Group"
+      VpcId: 
+        Fn::ImportValue: 
+          !Sub "${VPCStack}-VPC"
+      SecurityGroupIngress:
+        - CidrIp: !Ref SSHAccessIPRange
+          Description: "SSH access from IP address"
+          FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+        - CidrIp: !Ref HTTPAccessIPRange
+          Description: "HTTP access from IP address"
+          FromPort: 80 
+          ToPort: 80
+          IpProtocol: tcp
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !FindInMap [ AmazonLinux2Mappings, !Ref 'AWS::Region', AMI]
+      KeyName: !Ref KeyName
+      SubnetId: 
+        Fn::ImportValue: 
+          !Sub "${VPCStack}-SubnetPublic"
+      SecurityGroupIds: 
+       - !GetAtt EC2SecurityGroup.GroupId
+      IamInstanceProfile: 
+        Fn::ImportValue: 
+          !Sub "${CodeAccessRoleStack}-CodeAccess-InstanceProfile"
+      UserData: !Base64 |
+        #!/bin/bash -ex
+        sudo yum update -y
+
+        # Java installation
+        cd /opt/
+        curl -O https://download.java.net/java/GA/jdk13.0.2/d4173c853231432d94f001e99d882ca7/8/GPL/openjdk-13.0.2_linux-x64_bin.tar.gz
+        tar xvf openjdk-13.0.2_linux-x64_bin.tar.gz && sudo rm openjdk-13.0.2_linux-x64_bin.tar.gz
+        export JAVA_HOME=/opt/jdk-13.0.2/bin
+        export PATH=$PATH:$JAVA_HOME
+
+        # Start the service
+        mkdir trendyeats
+        cd trendyeats
+        aws s3api get-object --bucket trendyeats --key servlet/application.jar application.jar 
+        nohup java -jar -Dspring.profiles.active=prod application.jar & 
+
+        # NGINX installation/configuration 
+        aws s3 cp s3://trendyeats/website/build build --recursive
+        mkdir -p /var/www/trendyeats
+        chmod -R 755 /var/www/trendyeats
+        mv build /var/www/trendyeats
+        amazon-linux-extras install nginx1.12 << 'EOF'
+        y
+        EOF
+        aws s3api get-object --bucket trendyeats --key nginx.conf nginx.conf
+        rm /etc/nginx/nginx.conf
+        mv nginx.conf /etc/nginx/
+
+        # Start NGINX server to serve the website
+        systemctl start nginx
+
+
+  EC2ElasticIP: 
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref EC2Instance
+
+Outputs:
+  EC2Instance:
+    Description: "Created EC2 instance ID"
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub '${AWS::StackName}-EC2-Instance-ID'

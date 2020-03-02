@@ -1,0 +1,48 @@
+---
+Parameters:
+  CodeBucket:
+    Description: "S3 bucket containing application code to be deployed to EC2"
+    Type: String
+
+Resources:
+  CodeAccessRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow" 
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: "CodeAccessPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:Get*"
+                  - "s3:List*"
+                Resource: 
+                  - !Sub "arn:aws:s3:::${CodeBucket}"
+                  - !Sub "arn:aws:s3:::${CodeBucket}/*"
+  CodeAccessInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Roles: 
+        - !Ref CodeAccessRole
+
+Outputs:
+  CodeAccessRole:
+    Description: "Role to fetch application code in S3"
+    Value: !Ref CodeAccessRole
+    Export: 
+      Name: !Sub "${AWS::StackName}-CodeAccess-Role"
+  CodeAccessInstanceProfile:
+    Description: "Instance profile for CodeAccessRole"
+    Value: !Ref CodeAccessInstanceProfile
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeAccess-InstanceProfile"
